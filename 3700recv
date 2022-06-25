@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+#
+# CS3700, Fall 2021
+# TCP Project Starter Code
+
+# this code functions as a server in 3-way handshake
+import datetime
+import json
+import sys
+import socket
+
+from base64 import b64decode
+
+
+def log(string):
+  sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + (" " * 5) + " 3700recv: " + string + "\n")
+
+MSG_SIZE = 1500
+DATA_SIZE = 1000
+EXPECTED_SEQ = 0000
+ACK = 0
+PREV_ACK = -1000
+TIMEOUT = 30
+
+# Bind to localhost and an ephemeral port
+UDP_IP = "127.0.0.1"
+UDP_PORT = int(sys.argv[1])
+
+# Set up the socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((UDP_IP, UDP_PORT))
+sock.settimeout(TIMEOUT)
+
+# Get port we bound to
+UDP_PORT = sock.getsockname()[1]
+log("[bound] " + str(UDP_PORT))
+
+
+
+# Now listen for packets
+
+while True:
+  result = sock.recvfrom(MSG_SIZE)
+
+  # If nothing is ready, we hit the timeout
+  if result:
+    # data = {sequence, data, ack, eof}
+    # addr = (IP, port)
+    (data, addr) = result
+
+    try:
+      decoded = json.loads(data.decode())
+
+      # If the EOF flag is set, exit
+      if (decoded['eof']) and EXPECTED_SEQ >= decoded['sequence'] > PREV_ACK:
+        log("[completed]")
+        sys.exit(0)
+
+      # If there is data, we accept it and print it out
+      if (decoded['data']):
+        data = b64decode(decoded['data'].encode())
+        # If we receive data, we assume it's in-order
+        # You will need to do much more here
+        #   shut up
+      if EXPECTED_SEQ >= decoded['sequence'] > PREV_ACK:
+        log("[recv data] {} >= {} > {} ({}) ACCEPTED (in-order).".format(EXPECTED_SEQ, decoded['sequence'], PREV_ACK, len(data)))
+        sys.stdout.buffer.write(data)
+        ACK = decoded['sequence']
+        EXPECTED_SEQ = ACK + DATA_SIZE
+        PREV_ACK = ACK
+      else:
+        log("[recv data] {} ({}) REJECTED (out-of-order).".format(decoded['sequence'], len(data)))
+        ACK = PREV_ACK
+      # Send back an ack to the sender
+      msg = json.dumps({"ack": ACK + len(data)})
+      log("SND ACK " + str((ACK + len(data))))
+      sent = sock.sendto(msg.encode(), addr)
+      if sent < len(msg):
+        log("[error] unable to fully send packet")
+
+
+
+    except (ValueError, KeyError, TypeError) as e:
+      log("[recv corrupt packet]")
+      raise e
+  else:
+    log("[error] timeout")
+    sys.exit(-1)

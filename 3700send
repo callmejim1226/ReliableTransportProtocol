@@ -1,0 +1,161 @@
+#!/usr/bin/python3
+#
+# CS3700, Fall 2021
+# TCP Project Starter Code
+#
+
+import datetime
+import json
+import sys
+import socket
+import time
+
+from base64 import b64encode
+
+MSG_SIZE = 1500
+DATA_SIZE = 1000
+TIMEOUT = 30
+SEQUENCE = 0
+DATAGRAM = 1472
+ADV_SIZE = 0
+WND = 10
+
+# Bind to localhost and an ephemeral port
+IP_PORT = sys.argv[1]
+UDP_IP = IP_PORT[0:IP_PORT.find(":")]
+UDP_PORT = int(IP_PORT[IP_PORT.find(":") + 1:])
+dest = (UDP_IP, UDP_PORT)
+
+time.sleep(.5)
+
+# Set up the socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(TIMEOUT)
+
+# Setting other stuff up
+to_send = sys.stdin.buffer
+stuff_left = True
+packeted_data = []
+while stuff_left:
+  just_read = to_send.read(DATA_SIZE)
+  if len(just_read) > 0:
+    packeted_data.append(just_read)
+  if len(just_read) != DATA_SIZE:
+    stuff_left = False
+
+# Prints out a string and the exact time this function was called
+def log(string):
+    sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " 3700send: " + string + "\n")
+
+
+# Function to send the next packet
+# Returns true if there is still data in STDIN to be sent, false if not
+def send_next_packet():
+    global SEQUENCE  # sequence no. is a variable specified earlier
+    global ADV_SIZE
+    if SEQUENCE//DATA_SIZE >= len(packeted_data):
+        # SEQUENCE = (len(packeted_data) - WND) * DATA_SIZE
+        return False
+    data = packeted_data[SEQUENCE // DATA_SIZE]  # Data is defined as whatever the first [DATA_SIZE] bytes of STDIN are
+    ADV_SIZE = DATAGRAM - len(data)
+    if (len(data) > 0):
+        # print(str(b64encode(data)))
+
+        # msg is a jason string of a dictionary with values
+        #   "sequence" : [int repping sequence number]
+        #       "data" : [the data as a string that *could* be represented in bytes]
+        #        "ack" : [boolean]
+        #        "eof" : [boolean]
+        msg = json.dumps({"sequence": SEQUENCE, "data": b64encode(data).decode(), "ack": False, "eof": False})
+        if sock.sendto(msg.encode(), dest) < len(msg):
+            # print an error message if we cannot transmit the full msg
+            log("[error] unable to fully send packet")
+        else:
+            # print a message of the sequence number and how long the data in the message was
+            log("SND PCK " + str(SEQUENCE) + " (" + str(len(data)) + ")")
+        # increment the seq num by how much data could be sent
+        SEQUENCE += len(data)
+        return True
+    else:
+        return False
+
+
+def send_num_packets(num):
+    done_flag = False
+    while num > 0 and not done_flag:
+        num -= 1
+        done_flag = not send_next_packet()
+    return not done_flag
+
+def recv_stuff(num):
+    global WND
+    result = None
+    log("gonna a result")
+    sock.settimeout(1)#(TIMEOUT / 12)
+    for i in range(num//2):
+        log("attempt no {}".format(i + 1))
+        try:
+            result = sock.recvfrom(MSG_SIZE)
+            # Grow the window if things are going smoothly
+            if WND < ADV_SIZE:
+                WND = WND + 1
+        except socket.timeout:
+            log("chose a result")
+            return result
+    log("chose a result")
+    return result
+
+
+
+# Send first packets
+send_num_packets(WND)
+
+# Now read in data, send packets
+ack_minus_two = -1000
+ack_minus_one = -1000
+ack_now = -1000
+while True:
+    log("ABOUT TO SLEEP")
+    result = recv_stuff(WND)
+    log("GOT SOMETHING BACK")
+
+    # if we get a response from the server (should be an ack message)
+    if result:
+        # the response (somehow) gets split into data and addr
+        # data is a bytes objct and addr is the address
+        (data, addr) = result
+        try:
+            decoded = json.loads(data.decode())
+            # update list of ack's
+            ack_minus_two = ack_minus_one
+            ack_minus_one = ack_now
+            ack_now = decoded['ack']
+            log("RCV ACK {}, {}, {}".format(ack_now, ack_minus_one, ack_minus_two))
+
+            # Slide back the window
+            SEQUENCE = decoded['ack']
+            # If our ack is for a packet
+            if ack_now // DATA_SIZE < len(packeted_data):
+                send_num_packets(WND)
+            else:
+                log("We done")
+                break
+        except (ValueError, KeyError, TypeError):
+            log("[recv corrupt packet]")
+    # if we never get a response, assume timeout
+    else:
+        log("AAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        ADV_SIZE = WND/2
+        WND = 10
+        log("[error] timeout")
+        SEQUENCE = 0
+        send_num_packets(WND)
+        # sys.exit(-1)
+
+sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+log("Sent EOF")
+sys.exit(0)
